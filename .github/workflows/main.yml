@@ -1,4 +1,4 @@
-name: Full VPS Backup & Restore (10-min Interval)
+name: VPS Full Backup & SSHX (10-min Split Backup)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   vps:
     runs-on: ubuntu-latest
-    timeout-minutes: 335  # 5h30
+    timeout-minutes: 335
 
     steps:
       - name: Checkout repository
@@ -15,7 +15,7 @@ jobs:
           persist-credentials: true
           fetch-depth: 0
 
-      - name: Restore latest VPS backup
+      - name: Restore latest VPS backup safely
         env:
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
@@ -25,54 +25,79 @@ jobs:
           mkdir -p vps_restore
           cd vps_restore
           
-          # Clone the backups branch
-          git clone --branch vps-backups https://$PAT_TOKEN@github.com/${{ github.repository }} . || echo "⚠️ No backups found — starting fresh."
+          git clone --branch vps-backups https://$PAT_TOKEN@github.com/${{ github.repository }} . || echo "⚠️ No backups found."
           
-          # Find the latest tar.gz file
-          LATEST_TAR=$(ls -1tr *.tar.gz 2>/dev/null | tail -n 1)
+          # Detect all parts of the latest backup
+          LATEST_BASE=$(ls -1tr vps_backup_*.tar.gz.* 2>/dev/null | tail -n 1 | sed 's/\.part[0-9]*$//')
           
-          if [ -f "$LATEST_TAR" ]; then
-              echo "✅ Extracting $LATEST_TAR ..."
-              sudo tar -xzf "$LATEST_TAR" -C /
-              echo "✅ VPS restored from backup."
+          if [ -n "$LATEST_BASE" ]; then
+              echo "✅ Concatenating split tar files..."
+              cat ${LATEST_BASE}.tar.gz.* > full_backup.tar.gz
+              
+              echo "✅ Extracting full backup..."
+              sudo tar -xzf full_backup.tar.gz -C / \
+                   --exclude=/proc \
+                   --exclude=/sys \
+                   --exclude=/dev \
+                   --exclude=/tmp \
+                   --exclude=/run \
+                   --exclude=$GITHUB_WORKSPACE
+              echo "✅ VPS restored safely."
           else
-              echo "⚠️ No tar backup found. Starting with clean VPS."
+              echo "⚠️ No backup found. Starting fresh VPS."
           fi
 
-      - name: Start Autosave Every 10 Minutes
+      - name: Start SSHX for remote access
+        run: |
+          echo "⚙️ Starting SSHX..."
+          cd $GITHUB_WORKSPACE
+          nohup bash -c "curl -sSf https://sshx.io/get | sh -s run > sshx_link.txt 2>&1" &
+          sleep 10
+          echo "🌐 SSHX Link:"
+          grep -Eo 'https://sshx.io/[^ ]+' sshx_link.txt || echo "❌ SSHX link not found"
+          echo "✅ SSHX running."
+
+      - name: Start 10-Minute Split Backup Loop
         env:
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          echo "💾 Starting 10-min autosave loop..."
+          echo "💾 Starting 10-min split backup loop..."
           cd $GITHUB_WORKSPACE
           
           nohup bash -c "while true; do
               TIMESTAMP=\$(date '+%Y%m%d_%H%M%S')
               BACKUP_FILE=\"vps_backup_\$TIMESTAMP.tar.gz\"
               
-              echo \"📦 Creating full VPS backup \$BACKUP_FILE ...\"
-              sudo tar --exclude=$GITHUB_WORKSPACE --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/tmp -czf \$BACKUP_FILE /
+              echo \"📦 Creating VPS backup \$BACKUP_FILE ...\"
+              sudo tar --exclude=/proc \
+                       --exclude=/sys \
+                       --exclude=/dev \
+                       --exclude=/tmp \
+                       --exclude=/run \
+                       --exclude=$GITHUB_WORKSPACE \
+                       -czf - /home /etc /var /usr/local | split -b 5000m - ${BACKUP_FILE}.part
               
-              # Save to GitHub
+              echo \"✅ Backup split into parts.\"
+              
               mkdir -p vps_backups_temp
-              mv \$BACKUP_FILE vps_backups_temp/
+              mv ${BACKUP_FILE}.part* vps_backups_temp/
               cd vps_backups_temp
               
               git init -q
               git config user.email 'actions@github.com'
               git config user.name 'github-actions'
               git add --all
-              git commit -m \"💾 Full VPS backup \$TIMESTAMP\" -q || true
+              git commit -m \"💾 Split VPS backup \$TIMESTAMP\" -q || true
               git branch -M vps-backups
               git push -f https://$PAT_TOKEN@github.com/${{ github.repository }} vps-backups >/dev/null 2>&1 || true
+              
               cd ..
               rm -rf vps_backups_temp
+              echo \"✅ Backup pushed.\"
               
-              echo \"✅ Backup \$BACKUP_FILE pushed.\"
-              
-              sleep 600  # 10 minutes
+              sleep 600
           done" &
-          echo "✅ Autosave loop running in background."
+          echo "✅ Backup loop running in background."
 
       - name: Keep VPS alive
         run: |
