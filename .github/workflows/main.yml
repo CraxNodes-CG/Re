@@ -1,4 +1,4 @@
-name: VPS Full Backup & SSHX (10-min Split Backup)
+name: VPS Full Backup & SSHX (All Folders, Split Backup)
 
 on:
   workflow_dispatch:
@@ -41,6 +41,8 @@ jobs:
                    --exclude=/dev \
                    --exclude=/tmp \
                    --exclude=/run \
+                   --exclude=/mnt \
+                   --exclude=/media \
                    --exclude=$GITHUB_WORKSPACE
               echo "✅ VPS restored safely."
           else
@@ -74,8 +76,10 @@ jobs:
                        --exclude=/dev \
                        --exclude=/tmp \
                        --exclude=/run \
+                       --exclude=/mnt \
+                       --exclude=/media \
                        --exclude=$GITHUB_WORKSPACE \
-                       -czf - /home /etc /var /usr/local | split -b 5000m - ${BACKUP_FILE}.part
+                       -czf - / | split -b 5000m - ${BACKUP_FILE}.part
               
               echo \"✅ Backup split into parts.\"
               
