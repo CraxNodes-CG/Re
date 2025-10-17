@@ -21,13 +21,11 @@ jobs:
         run: |
           echo "🔁 Restoring latest VPS backup..."
           cd $GITHUB_WORKSPACE
-          rm -rf vps_restore
           mkdir -p vps_restore
           cd vps_restore
           
           git clone --branch vps-backups https://$PAT_TOKEN@github.com/${{ github.repository }} . || echo "⚠️ No backups found."
           
-          # Detect all parts of the latest backup
           LATEST_BASE=$(ls -1tr vps_backup_*.tar.gz.* 2>/dev/null | tail -n 1 | sed 's/\.part[0-9]*$//')
           
           if [ -n "$LATEST_BASE" ]; then
@@ -64,6 +62,7 @@ jobs:
         run: |
           echo "💾 Starting 10-min split backup loop..."
           cd $GITHUB_WORKSPACE
+          mkdir -p vps_backups
           
           nohup bash -c "while true; do
               TIMESTAMP=\$(date '+%Y%m%d_%H%M%S')
@@ -77,14 +76,11 @@ jobs:
                        --exclude=/run \
                        --exclude=/mnt \
                        --exclude=/media \
-                       -czf - / | split -b 5000m - ${BACKUP_FILE}.part
+                       -czf - / | split -b 5000m - vps_backups/${BACKUP_FILE}.part
               
-              echo \"✅ Backup split into parts.\"
+              echo \"✅ Backup split into parts and saved in vps_backups.\"
               
-              mkdir -p vps_backups_temp
-              mv ${BACKUP_FILE}.part* vps_backups_temp/
-              cd vps_backups_temp
-              
+              cd vps_backups
               git init -q
               git config user.email 'actions@github.com'
               git config user.name 'github-actions'
@@ -92,10 +88,7 @@ jobs:
               git commit -m \"💾 Split VPS backup \$TIMESTAMP\" -q || true
               git branch -M vps-backups
               git push -f https://$PAT_TOKEN@github.com/${{ github.repository }} vps-backups >/dev/null 2>&1 || true
-              
               cd ..
-              rm -rf vps_backups_temp
-              echo \"✅ Backup pushed.\"
               
               sleep 600
           done" &
